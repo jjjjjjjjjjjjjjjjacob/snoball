@@ -569,7 +569,450 @@ curl -H "Authorization: Bearer $ALPACA_API_KEY" https://paper-api.alpaca.markets
 
 ---
 
-## 8. Verifying Your Setup
+## 8. GitHub Actions Setup
+
+GitHub Actions handles CI/CD for the project, running tests and deploying to production. You need to configure secrets and environment variables in your GitHub repository.
+
+### 8.1. GitHub Environments Setup
+
+**Location**: GitHub Repository → Settings → Environments
+
+**Create these environments:**
+1. **test** - For CI testing
+2. **production** - For production deployment
+
+### 8.2. Required GitHub Secrets
+
+**Location**: GitHub Repository → Settings → Secrets and variables → Actions
+
+#### **Database Secrets (Atomic Variables)**
+
+**Same secret names, different values per environment:**
+
+**Test Environment Values:**
+```bash
+DATABASE_HOST=aws-us-east-2-2.pg.psdb.cloud     # PlanetScale dev branch
+DATABASE_NAME=snoball-prod                       # Database name
+DATABASE_USERNAME=pscale_api_dev_xxxxx           # Dev branch username
+DATABASE_PASSWORD=pscale_pw_dev_xxxxx            # Dev branch password
+```
+
+**Production Environment Values:**
+```bash
+DATABASE_HOST=aws-us-east-2-1.pg.psdb.cloud     # PlanetScale main branch
+DATABASE_NAME=snoball-prod                       # Database name
+DATABASE_USERNAME=pscale_api_prod_xxxxx          # Main branch username
+DATABASE_PASSWORD=pscale_pw_prod_xxxxx           # Main branch password
+```
+
+#### **Trading API Secrets**
+```bash
+ALPACA_API_KEY                  # Alpaca paper trading API key
+ALPACA_SECRET_KEY               # Alpaca paper trading secret
+```
+
+#### **Authentication Secrets**
+```bash
+WORKOS_API_KEY                  # WorkOS API key
+WORKOS_CLIENT_ID                # WorkOS client ID
+WORKOS_WEBHOOK_SECRET           # WorkOS webhook secret
+NEXTAUTH_SECRET                 # NextAuth secret (generate with openssl rand -hex 32)
+```
+
+#### **Security Secrets**
+```bash
+ENCRYPTION_KEY                  # 32-character encryption key (generate with openssl rand -hex 32)
+```
+
+#### **Deployment Secrets (Optional)**
+```bash
+# Render API (for manual deployment triggers)
+RENDER_API_KEY                  # Render API key
+RENDER_TRADE_SERVER_ID          # Trade server service ID
+RENDER_WORKER_ID                # Background worker service ID
+RENDER_SERVICE_URL              # your-service.onrender.com (without https://)
+
+# Vercel API (for deployment status)
+VERCEL_TOKEN                    # Vercel API token
+VERCEL_APP_URL                  # https://your-app.vercel.app
+```
+
+#### **Notification Secrets (Optional)**
+```bash
+SLACK_WEBHOOK_URL               # Slack webhook for deployment notifications
+```
+
+### 8.3. How to Set Up GitHub Environments and Secrets
+
+1. **Create GitHub Environments**:
+   - Go to: GitHub Repository → Settings → Environments
+   - Click "New environment"
+   - Create `test` environment (for CI)
+   - Create `production` environment (for deployment)
+
+2. **Add Environment-Specific Secrets**:
+   
+   **For Test Environment:**
+   - Go to `test` environment → Add secret
+   - Add `DATABASE_HOST` with dev branch value
+   - Add `DATABASE_USERNAME` with dev credentials
+   - Add `DATABASE_PASSWORD` with dev credentials
+   - Add other test-specific secrets
+   
+   **For Production Environment:**
+   - Go to `production` environment → Add secret
+   - Add `DATABASE_HOST` with main branch value
+   - Add `DATABASE_USERNAME` with production credentials
+   - Add `DATABASE_PASSWORD` with production credentials
+   - Add other production-specific secrets
+
+3. **Add Repository-Level Secrets** (shared across environments):
+   - Go to: Repository → Settings → Secrets and variables → Actions
+   - Add secrets that are the same for all environments:
+     - `NEXTAUTH_SECRET`
+     - `ENCRYPTION_KEY`
+     - `ALPACA_API_KEY` (if same for test/prod)
+     - `WORKOS_API_KEY`
+
+### 8.4. Generating Required Secrets
+
+**Generate Encryption Keys:**
+```bash
+# Generate NEXTAUTH_SECRET
+openssl rand -hex 32
+
+# Generate ENCRYPTION_KEY
+openssl rand -hex 32
+```
+
+**Get PlanetScale Database Details:**
+```bash
+# Connect to get connection details
+pscale connect snoball-prod main --format=connection-string
+
+# Extract components:
+# HOST: aws-us-east-1-portal.23.psdb.cloud
+# USERNAME: pscale_api_xxxxx.xxxxx
+# PASSWORD: pscale_pw_xxxxx
+# NAME: snoball-prod
+```
+
+**Get Render Service IDs:**
+```bash
+# Service ID is in the Render dashboard URL:
+# https://dashboard.render.com/web/srv-abc123def456 
+# Service ID: srv-abc123def456
+```
+
+### 8.5. Environment-Specific Configuration
+
+**CI/Testing Environment:**
+- Uses local PostgreSQL and Redis containers
+- Tests against paper trading API
+- Does not deploy to production
+
+**Production Deployment:**
+- Uses production database credentials
+- Triggers deployment to Render and Vercel
+- Runs post-deployment health checks
+
+### 8.6. How GitHub Actions Uses Environments
+
+**CI Workflow** uses `environment: test`:
+```yaml
+jobs:
+  test:
+    environment: test  # Gets test environment secrets
+    env:
+      DATABASE_HOST: ${{ secrets.DATABASE_HOST }}  # Gets test value
+```
+
+**Deploy Workflow** uses `environment: production`:
+```yaml
+jobs:
+  database-migration:
+    environment: production  # Gets production environment secrets
+    env:
+      DATABASE_HOST: ${{ secrets.DATABASE_HOST }}  # Gets production value
+```
+
+**Manual Deployment** can choose environment:
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [production, staging]
+        
+jobs:
+  deploy:
+    environment: ${{ github.event.inputs.environment }}  # Dynamic environment
+```
+
+### 8.7. GitHub Actions Workflows
+
+#### **CI Workflow (`.github/workflows/ci.yml`)**
+**Triggers**: Pull requests and pushes to main/develop
+**Environment**: `test`
+**Jobs**:
+- ✅ Lint and type checking
+- ✅ Database migration testing
+- ✅ Test suite with coverage
+- ✅ Security scanning
+- ✅ Build verification
+- ✅ Performance checks
+
+#### **Deploy Workflow (`.github/workflows/deploy.yml`)**
+**Triggers**: Pushes to main branch or manual dispatch
+**Environment**: `production` (or user-selected)
+**Jobs**:
+- ✅ Pre-deployment checks
+- ✅ Database migrations
+- ✅ Backend deployment (Render)
+- ✅ Frontend deployment (Vercel)
+- ✅ Post-deployment verification
+- ✅ Deployment notifications
+
+### 8.8. Secret Synchronization Strategy
+
+The project uses GitHub as the single source of truth for shared secrets, automatically syncing them to deployment services during CI/CD.
+
+#### **Synchronization Workflow**
+
+**Automatic Sync During Deployment:**
+- The deploy workflow automatically triggers secret synchronization before deployment
+- Ensures all services have the latest secrets from GitHub
+- Prevents deployment failures due to outdated secrets
+
+**Manual Sync Workflow:**
+```bash
+# Trigger manual secret sync via GitHub Actions
+gh workflow run sync-secrets.yml \
+  -f environment="production" \
+  -f services="all"
+
+# Sync only to Render services
+gh workflow run sync-secrets.yml \
+  -f environment="production" \
+  -f services="render"
+
+# Sync only to Vercel services
+gh workflow run sync-secrets.yml \
+  -f environment="production" \
+  -f services="vercel"
+```
+
+#### **What Gets Synced**
+
+**Shared Database Configuration:**
+- `DATABASE_HOST` - PlanetScale host URL
+- `DATABASE_PORT` - Database port (5432)
+- `DATABASE_NAME` - Database name
+- `DATABASE_USERNAME` - Environment-specific username
+- `DATABASE_PASSWORD` - Environment-specific password
+- `DATABASE_SSL` - SSL mode (require)
+- `DATABASE_POOLING_PORT` - Connection pooling port (6432)
+
+**Authentication & Security:**
+- `NEXTAUTH_SECRET` - NextAuth JWT secret
+- `WORKOS_API_KEY` - WorkOS authentication API key
+- `WORKOS_CLIENT_ID` - WorkOS client identifier
+- `ENCRYPTION_KEY` - Application encryption key
+
+#### **Platform-Specific Secrets**
+
+**Keep These Service-Specific:**
+- `REDIS_URL` - Render provides automatically
+- `VERCEL_URL` - Vercel provides automatically
+- `PORT` - Service-specific port configurations
+- Platform-specific URLs and endpoints
+
+#### **How Sync Works**
+
+**For Render Services:**
+1. Gets service IDs from GitHub secrets (`RENDER_TRADE_SERVER_ID`, `RENDER_WORKER_ID`)
+2. Uses Render API to update environment variables
+3. Batches updates for efficiency
+4. Validates successful updates
+
+**For Vercel Services:**
+1. Maps GitHub environment to Vercel environment (`production` → `production`, `test` → `preview`)
+2. Uses Vercel CLI to remove and add updated variables
+3. Handles each secret individually
+4. Provides detailed logging for troubleshooting
+
+#### **Monitoring Secret Sync**
+
+**Check Sync Status:**
+```bash
+# View recent workflow runs
+gh run list --workflow=sync-secrets.yml
+
+# View detailed logs
+gh run view --log
+```
+
+**Sync Validation:**
+- Workflow validates HTTP responses for Render API calls
+- Vercel CLI provides exit codes for success/failure
+- Summary job reports overall sync status
+- Failed syncs prevent deployment from continuing
+
+#### **Best Practices for Secret Sync**
+
+1. **Test Environment First**: Always test secret changes in the test environment
+2. **Monitor Deployments**: Watch for sync failures during deployment
+3. **Manual Verification**: Periodically verify secrets are current in service dashboards
+4. **Rotation Strategy**: Update GitHub secrets first, then trigger sync
+5. **Rollback Plan**: Keep previous secret values in case rollback is needed
+
+#### **Troubleshooting Secret Sync**
+
+**Common Issues:**
+```bash
+# Render API authentication failed
+# Solution: Check RENDER_API_KEY is current and has correct permissions
+
+# Service ID not found
+# Solution: Verify RENDER_TRADE_SERVER_ID and RENDER_WORKER_ID are correct
+
+# Vercel CLI authentication failed
+# Solution: Check VERCEL_TOKEN is current and has project access
+
+# Environment variable not syncing
+# Solution: Ensure secret exists in GitHub with correct name/case
+```
+
+**Debug Commands:**
+```bash
+# Test Render API access
+curl -H "Authorization: Bearer $RENDER_API_KEY" \
+  https://api.render.com/v1/services
+
+# Test Vercel CLI access
+vercel env ls --token="$VERCEL_TOKEN"
+
+# Verify GitHub secrets
+gh secret list
+```
+
+### 8.9. Security Best Practices
+
+**Secret Management:**
+- ✅ Never commit secrets to code
+- ✅ Use different secrets for CI vs Production
+- ✅ Rotate secrets regularly
+- ✅ Use least-privilege access tokens
+- ✅ Enable MFA on all service accounts
+- ✅ Use GitHub as single source of truth for shared secrets
+- ✅ Monitor secret sync workflows for failures
+
+**Access Control:**
+- ✅ Limit who can modify GitHub secrets
+- ✅ Use environment protection rules
+- ✅ Review deployment logs regularly
+- ✅ Monitor for unauthorized access
+
+### 8.10. Troubleshooting GitHub Actions
+
+**Common Issues:**
+
+**Secret Not Found:**
+```bash
+# Error: Secret ENCRYPTION_KEY not found
+# Solution: Add the secret in GitHub repository settings
+```
+
+**Database Connection Failed:**
+```bash
+# Error: Database connection failed
+# Solution: Check DATABASE_* secrets match PlanetScale connection details
+```
+
+**Deployment Failed:**
+```bash
+# Error: Health check failed
+# Solution: Check service URLs in RENDER_SERVICE_URL and VERCEL_APP_URL
+```
+
+**API Rate Limits:**
+```bash
+# Error: API rate limit exceeded
+# Solution: Add delays between API calls or use different API tokens
+```
+
+### 8.11. Monitoring GitHub Actions
+
+**Check Workflow Status:**
+- GitHub Repository → Actions tab
+- View detailed logs for each job
+- Monitor deployment notifications
+
+**Set Up Alerts:**
+```bash
+# Optional: Enable email notifications
+# Repository Settings → Notifications → Actions
+```
+
+---
+
+## 9. Verifying Your Setup
+
+### 9.1. Secret Configuration Validation
+
+**Validate all secrets across all services:**
+```bash
+# Validate all secrets for production environment
+bun run secrets:validate
+
+# Validate secrets for test environment
+bun run secrets:validate:test
+
+# Validate only GitHub repository/environment secrets
+bun run secrets:validate:github
+
+# Validate only Render service environment variables
+bun run secrets:validate:render
+
+# Validate only Vercel project environment variables
+bun run secrets:validate:vercel
+```
+
+**What gets validated:**
+- ✅ Local environment files (`.env.local`, `.env.development`, `.env.production`)
+- ✅ GitHub repository and environment secrets
+- ✅ Render service environment variables
+- ✅ Vercel project environment variables
+- ✅ Secret format validation (key lengths, prefixes, etc.)
+- ✅ Required vs optional secret enforcement
+
+**Expected output:**
+```bash
+🔍 Validating secrets configuration...
+
+📄 Validating .env.local...
+🔐 Validating GitHub secrets...
+⚙️  Validating Render secrets...
+🔺 Validating Vercel secrets...
+
+📊 Validation Report
+
+📋 Summary:
+✅ Valid secrets: 25
+❌ Missing secrets: 0
+⚠️  Invalid secrets: 0
+
+🎉 All required secrets are properly configured!
+
+📋 Next Steps:
+1. Test database connection: bun run db:test
+2. Test API connections: bun run trading:test
+3. Run local development: bun run dev
+4. Deploy to production: git push origin main
+```
+
+### 9.2. Application Testing
 
 Run these commands to verify everything works:
 
@@ -595,7 +1038,7 @@ bun run lint
 
 ---
 
-## 9. Security Best Practices
+## 10. Security Best Practices
 
 1. **API Keys**: Never commit `.env` files to version control
 2. **Encryption**: Use strong encryption keys for sensitive data
@@ -614,7 +1057,7 @@ bun run lint
 
 ---
 
-## 10. Cost Estimates
+## 11. Cost Estimates
 
 ### Development Environment (Free Tiers)
 - PlanetScale: Free (5GB storage, 1 billion row reads/month)
@@ -640,7 +1083,7 @@ bun run lint
 
 ---
 
-## 11. Monitoring & Observability
+## 12. Monitoring & Observability
 
 ### Built-in Platform Features:
 - **Render**: Service metrics, logs, health checks
@@ -656,7 +1099,7 @@ bun run lint
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 ### Common Issues:
 
@@ -689,7 +1132,7 @@ ws.onopen = () => console.log('Connected');
 
 ---
 
-## 13. Migration from AWS
+## 14. Migration from AWS
 
 If migrating from AWS infrastructure:
 
@@ -701,7 +1144,7 @@ If migrating from AWS infrastructure:
 
 ---
 
-## 14. Support & Resources
+## 15. Support & Resources
 
 - [PlanetScale Docs](https://planetscale.com/docs)
 - [Render Docs](https://render.com/docs)

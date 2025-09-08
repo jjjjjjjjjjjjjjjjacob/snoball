@@ -15,7 +15,12 @@
     "test": "nx run-many --target=test --all",
     "lint": "nx run-many --target=lint --all",
     "type-check": "nx run-many --target=type-check --all",
-    "migrate:deploy": "bun run packages/database/migrations.ts"
+    "migrate:deploy": "bun run packages/database/migrations.ts",
+    "secrets:validate": "bun run scripts/validate-secrets.ts",
+    "secrets:validate:test": "bun run scripts/validate-secrets.ts --environment=test",
+    "secrets:validate:github": "bun run scripts/validate-secrets.ts --service=github",
+    "secrets:validate:render": "bun run scripts/validate-secrets.ts --service=render",
+    "secrets:validate:vercel": "bun run scripts/validate-secrets.ts --service=vercel"
   },
   "dependencies": {},
   "devDependencies": {

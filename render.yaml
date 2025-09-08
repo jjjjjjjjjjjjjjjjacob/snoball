@@ -101,11 +101,6 @@ services:
 # Database configuration (external - PlanetScale)
 # Set DATABASE_URL in environment variables
 
-# Notifications
-notifications:
-  - type: email
-    emails:
-      - your-email@example.com
-    events:
-      - deploy-failed
-      - deploy-succeeded
+# Notifications are configured in the Render dashboard:
+# Dashboard → Service → Settings → Notifications
+# Available notification types: email, Slack, Discord, webhook
