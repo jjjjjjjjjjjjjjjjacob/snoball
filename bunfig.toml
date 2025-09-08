@@ -1,0 +1,16 @@
+[install]
+# Bun-specific optimizations
+production = false
+frozen = false
+
+[install.cache]
+dir = "~/.bun/cache"
+disable = false
+
+[install.lockfile]
+save = true
+print = "yarn"
+
+[test]
+coverage = true
+coverageReporter = ["text", "lcov"]

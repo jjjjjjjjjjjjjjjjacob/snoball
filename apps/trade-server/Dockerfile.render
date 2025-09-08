@@ -1,0 +1,96 @@
+# Render optimized Dockerfile for Snoball Trade Server
+# Multi-stage build for efficient deployment
+FROM oven/bun:1-alpine AS base
+
+# Install system dependencies
+RUN apk add --no-cache \
+    curl \
+    ca-certificates \
+    tzdata
+
+# Set timezone to US/Eastern for trading hours
+ENV TZ=America/New_York
+
+# Create app directory
+WORKDIR /app
+
+# Copy root package files for workspace support
+COPY ../../package.json ../../bun.lockb ./
+COPY ../../bunfig.toml ./
+
+# Copy workspace package.json files for better caching
+COPY ../../apps/trade-server/package.json ./apps/trade-server/
+COPY ../../packages/*/package.json ./packages/*/
+
+# Install dependencies with frozen lockfile
+RUN bun install --frozen-lockfile --production
+
+# Production stage
+FROM oven/bun:1-alpine AS production
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    curl \
+    ca-certificates \
+    tzdata \
+    tini
+
+# Set timezone
+ENV TZ=America/New_York
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S bun -u 1001 -G nodejs
+
+WORKDIR /app
+
+# Copy node_modules from base stage
+COPY --from=base --chown=bun:nodejs /app/node_modules ./node_modules
+COPY --from=base --chown=bun:nodejs /app/package.json ./package.json
+
+# Copy source code
+COPY --chown=bun:nodejs ../../packages ./packages
+COPY --chown=bun:nodejs . ./apps/trade-server
+
+# Set working directory to trade server
+WORKDIR /app/apps/trade-server
+
+# Create data directory for logs and temporary files
+RUN mkdir -p /app/data && \
+    chown -R bun:nodejs /app/data
+
+# Switch to non-root user
+USER bun
+
+# Expose port for Render
+EXPOSE 9090
+
+# Health check for Render monitoring
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:9090/health || exit 1
+
+# Set production environment
+ENV NODE_ENV=production
+ENV PORT=9090
+
+# Use tini as init system for proper signal handling
+ENTRYPOINT ["/sbin/tini", "--"]
+
+# Start the application based on service type
+CMD ["sh", "-c", "\
+  if [ \"$WORKER_TYPE\" = \"order_processor\" ]; then \
+    echo 'Starting background worker...'; \
+    exec bun run src/worker.ts; \
+  elif [ \"$JOB_TYPE\" = \"market_analysis\" ]; then \
+    echo 'Starting market analysis job...'; \
+    exec bun run src/jobs/market-analysis.ts; \
+  else \
+    echo 'Starting trade server...'; \
+    exec bun run src/index.ts; \
+  fi \
+"]
+
+# Add labels for better container management
+LABEL maintainer="Snoball Trading Platform"
+LABEL version="1.0"
+LABEL description="WebSocket-enabled trading server for real-time market operations"

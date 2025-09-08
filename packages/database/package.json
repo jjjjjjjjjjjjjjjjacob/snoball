@@ -1,0 +1,17 @@
+{
+  "name": "@snoball/database",
+  "version": "0.1.0",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "migrate": "bun run migrations.ts"
+  },
+  "dependencies": {
+    "postgres": "^3.4.4",
+    "@snoball/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.3.3"
+  }
+}

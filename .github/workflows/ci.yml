@@ -1,0 +1,105 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+env:
+  BUN_VERSION: 1.0.23
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      
+      - name: Run linting
+        run: bun run lint
+      
+      - name: Type check
+        run: bun run type-check
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      
+      - name: Run tests
+        run: |
+          bun test --coverage
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          REDIS_URL: redis://localhost:6379
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      
+      - name: Build all packages
+        run: bun run build
+      
+      - name: Build Docker images
+        run: |
+          docker build -f apps/trade-server/Dockerfile -t trade-server:${{ github.sha }} . || true
+          docker build -f apps/web/Dockerfile -t web:${{ github.sha }} . || true
+      
+      - name: Configure AWS credentials
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      
+      - name: Push to ECR
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        run: |
+          if [ -n "${{ secrets.ECR_REGISTRY }}" ]; then
+            aws ecr get-login-password | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            
+            docker tag trade-server:${{ github.sha }} ${{ secrets.ECR_REGISTRY }}/trade-server:${{ github.sha }}
+            docker tag web:${{ github.sha }} ${{ secrets.ECR_REGISTRY }}/web:${{ github.sha }}
+            
+            docker push ${{ secrets.ECR_REGISTRY }}/trade-server:${{ github.sha }}
+            docker push ${{ secrets.ECR_REGISTRY }}/web:${{ github.sha }}
+          fi

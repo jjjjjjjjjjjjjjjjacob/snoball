@@ -1,0 +1,89 @@
+# Fly.io configuration for Snoball Trade Server
+app = 'snoball-trade-server'
+primary_region = 'ewr'  # Newark, NJ for low latency to US markets
+
+[build]
+  dockerfile = 'apps/trade-server/Dockerfile'
+
+[env]
+  PORT = '9090'
+  NODE_ENV = 'production'
+  ENVIRONMENT = 'production'
+
+[http_service]
+  internal_port = 9090
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 800
+
+  [[http_service.checks]]
+    grace_period = '10s'
+    interval = '30s'
+    method = 'GET'
+    timeout = '5s'
+    path = '/health'
+    protocol = 'http'
+
+# WebSocket configuration
+[[services]]
+  protocol = 'tcp'
+  internal_port = 9090
+  processes = ['app']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 800
+
+# Resource allocation
+[vm]
+  size = 'shared-cpu-1x'  # Start with smallest, can scale up
+  memory = '1024'
+
+# Auto-scaling configuration
+[processes]
+  app = 'bun start'
+
+# Secrets (set via flyctl)
+# flyctl secrets set DATABASE_URL=postgresql://...
+# flyctl secrets set ALPACA_API_KEY=...
+# flyctl secrets set ALPACA_SECRET_KEY=...
+# flyctl secrets set WORKOS_API_KEY=...
+# flyctl secrets set ENCRYPTION_KEY=...
+# flyctl secrets set REDIS_URL=...
+
+# Regional deployment (uncomment for multi-region)
+# [regions]
+#   primary = 'ewr'  # Newark, NJ (East Coast)
+#   fallback = 'lax' # Los Angeles, CA (West Coast)
+
+# Machine configuration for high availability
+[[machines]]
+  processes = ['app']
+  size = 'shared-cpu-1x'
+  regions = ['ewr']  # Primary region near US markets
+
+# Development overrides
+[deploy]
+  strategy = 'rolling'
+  wait_timeout = '5m'
+
+# Metrics and monitoring
+[metrics]
+  port = 9091
+  path = '/metrics'

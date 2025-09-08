@@ -1,0 +1,35 @@
+{
+  "name": "snoball",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*",
+    "functions/*"
+  ],
+  "scripts": {
+    "dev": "nx run-many --target=dev --all",
+    "build": "nx run-many --target=build --all",
+    "test": "nx run-many --target=test --all",
+    "lint": "nx run-many --target=lint --all",
+    "type-check": "nx run-many --target=type-check --all",
+    "migrate:deploy": "bun run packages/database/migrations.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@nx/js": "21.3.11",
+    "@nx/next": "21.3.11",
+    "@nx/react": "21.3.11",
+    "@nx/web": "21.3.11",
+    "@nx/workspace": "21.3.11",
+    "@types/node": "^20.11.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.3.3",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.4",
+    "nx": "21.3.11"
+  }
+}
