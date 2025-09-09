@@ -255,30 +255,53 @@ Snoball uses a multi-environment approach with separate configurations for devel
 
 ### 5.2. Deployment Configurations
 
-#### Development Configuration (`render.dev.yaml`)
+The project uses a **single environment-aware `render.yaml`** that works for both development and production environments through Render's Blueprint variable system.
+
+#### Unified Configuration (`render.yaml`)
 ```yaml
 services:
   - type: web
-    name: snoball-dev-trade-server
-    plan: free
-    branch: dev
+    name: ${SERVICE_PREFIX:-snoball-prod}-trade-server
+    plan: ${PLAN_TIER:-starter}
+    branch: ${DEPLOY_BRANCH:-main}
     envVars:
+      - key: NODE_ENV
+        value: ${NODE_ENVIRONMENT:-production}
       - key: ENVIRONMENT
-        value: development
+        value: ${APP_ENVIRONMENT:-production}
       - key: ALPACA_ENDPOINT
-        value: https://paper-api.alpaca.markets
+        value: ${ALPACA_ENDPOINT:-https://api.alpaca.markets}
+
+  - type: cron
+    name: ${SERVICE_PREFIX:-snoball-prod}-analysis
+    schedule: ${CRON_SCHEDULE:-*/30 * * * *}
+    # ... rest of configuration
 ```
 
-#### Production Configuration (`render.yaml`)
-```yaml
-services:
-  - type: web
-    name: snoball-prod-trade-server
-    plan: starter
-    branch: main
-    envVars:
-      - key: ENVIRONMENT
-        value: production
+#### Blueprint Variable Configuration
+
+**Production Blueprint Variables:**
+```bash
+SERVICE_PREFIX=snoball-prod
+PLAN_TIER=starter
+DEPLOY_BRANCH=main
+NODE_ENVIRONMENT=production
+APP_ENVIRONMENT=production
+CRON_SCHEDULE=*/30 * * * *
+ALPACA_ENDPOINT=https://api.alpaca.markets
+REDIS_PLAN=starter
+```
+
+**Development Blueprint Variables:**
+```bash
+SERVICE_PREFIX=snoball-dev
+PLAN_TIER=free
+DEPLOY_BRANCH=dev
+NODE_ENVIRONMENT=development
+APP_ENVIRONMENT=development
+CRON_SCHEDULE=0 */2 * * *
+ALPACA_ENDPOINT=https://paper-api.alpaca.markets
+REDIS_PLAN=free
 ```
 
 ### 5.3. Branch-Based Workflow
@@ -413,20 +436,82 @@ gh workflow run deploy-prod.yml -f environment="production"
 
 ### Backend Deployment (Render)
 
+#### 6.1. Create Production Blueprint
+
 1. **Connect Repository**
    - Go to [Render Dashboard](https://dashboard.render.com)
    - Click "New" → "Blueprint"
    - Connect your GitHub repository
    - Select the repository containing `render.yaml`
 
-2. **Configure Services**
-   Render automatically creates from `render.yaml`:
-   - Trade Server (Web Service on port 9090)
-   - Background Worker (order processing)
-   - Market Analysis (Cron Job)
-   - Redis Cache
+2. **Configure Blueprint Name and Branch**
+   - Blueprint Name: `snoball-production`
+   - Branch: Select `main`
 
-3. **Set Environment Variables**
+3. **Set Blueprint Environment Variables**
+   
+   Render will detect undefined variables in your `render.yaml` and prompt you to set them. Configure these values:
+
+   ```bash
+   SERVICE_PREFIX=snoball-prod
+   PLAN_TIER=starter
+   DEPLOY_BRANCH=main
+   NODE_ENVIRONMENT=production
+   APP_ENVIRONMENT=production
+   CRON_SCHEDULE=*/30 * * * *
+   ALPACA_ENDPOINT=https://api.alpaca.markets
+   REDIS_PLAN=starter
+   ```
+
+4. **Review Generated Services**
+   Render automatically creates from `render.yaml`:
+   - `snoball-prod-trade-server` (Web Service on port 9090)
+   - `snoball-prod-worker` (Background Worker)
+   - `snoball-prod-analysis` (Cron Job - every 30 minutes)
+   - `snoball-prod-redis` (Redis Cache)
+
+#### 6.2. Create Development Blueprint
+
+1. **Create Second Blueprint**
+   - Click "New" → "Blueprint"
+   - Select the same repository
+   - Blueprint Name: `snoball-development`
+   - Branch: Select `dev`
+
+2. **Set Development Blueprint Variables**
+
+   ```bash
+   SERVICE_PREFIX=snoball-dev
+   PLAN_TIER=free
+   DEPLOY_BRANCH=dev
+   NODE_ENVIRONMENT=development
+   APP_ENVIRONMENT=development
+   CRON_SCHEDULE=0 */2 * * *
+   ALPACA_ENDPOINT=https://paper-api.alpaca.markets
+   REDIS_PLAN=free
+   ```
+
+3. **Review Generated Development Services**
+   - `snoball-dev-trade-server` (Web Service - free tier)
+   - `snoball-dev-worker` (Background Worker - free tier)
+   - `snoball-dev-analysis` (Cron Job - every 2 hours)
+   - `snoball-dev-redis` (Redis Cache - free tier)
+
+#### 6.3. Understanding Blueprint vs Service Variables
+
+**Blueprint Variables** (set during Blueprint creation):
+- Control infrastructure configuration (service names, plans, branches)
+- Defined in `render.yaml` using `${VARIABLE_NAME:-default}` syntax
+- Set once per Blueprint, affect all services in the Blueprint
+- Examples: `SERVICE_PREFIX`, `PLAN_TIER`, `DEPLOY_BRANCH`
+
+**Service Environment Variables** (set per service after creation):
+- Control application behavior (database credentials, API keys)
+- Set individually for each service in Render dashboard
+- Can be different for each service within the same Blueprint
+- Examples: `DATABASE_PASSWORD`, `WORKOS_API_KEY`, `NEXTAUTH_SECRET`
+
+#### 6.4. Set Service-Level Environment Variables
    
    In Render dashboard, go to each service → Environment → Add Environment Variable:
    
@@ -458,6 +543,41 @@ gh workflow run deploy-prod.yml -f environment="production"
    NODE_ENV=production
    ENVIRONMENT=production
    ```
+
+#### 6.5. Updating Blueprint Variables
+
+If you need to change Blueprint variables (like upgrading plans or changing schedules):
+
+1. **Access Blueprint Settings**
+   - Go to Render Dashboard → Blueprints
+   - Select your Blueprint (`snoball-production` or `snoball-development`)
+   - Click "Settings" tab
+
+2. **Update Variables**
+   - Modify Blueprint environment variables as needed
+   - Example: Change `PLAN_TIER` from `free` to `starter`
+
+3. **Apply Changes**
+   - Click "Update Blueprint"
+   - Render will update all affected services automatically
+
+#### 6.6. Blueprint Variable Reference
+
+**Infrastructure Variables:**
+```bash
+SERVICE_PREFIX       # Service name prefix (snoball-prod, snoball-dev)
+PLAN_TIER           # Render plan (free, starter, standard, pro)
+DEPLOY_BRANCH       # Git branch (main, dev)
+REDIS_PLAN          # Redis plan tier
+```
+
+**Application Variables:**
+```bash
+NODE_ENVIRONMENT    # Node.js environment (production, development)
+APP_ENVIRONMENT     # Application environment identifier
+ALPACA_ENDPOINT     # Trading API endpoint
+CRON_SCHEDULE       # Market analysis frequency
+```
 
 ### Frontend Deployment (Vercel)
 
