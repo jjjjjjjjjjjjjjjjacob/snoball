@@ -1,0 +1,24 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+
+jobs:
+  deploy:
+    name: Deploy to Production Environment
+    uses: ./.github/workflows/deploy-core.yml
+    with:
+      environment: ${{ github.event.inputs.environment || 'production' }}
+      branch: main
+    secrets: inherit

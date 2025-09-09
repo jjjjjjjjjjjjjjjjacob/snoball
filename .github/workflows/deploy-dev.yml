@@ -1,0 +1,24 @@
+name: Deploy Development
+
+on:
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+        - development
+        - test
+
+jobs:
+  deploy:
+    name: Deploy to Development Environment
+    uses: ./.github/workflows/deploy-core.yml
+    with:
+      environment: ${{ github.event.inputs.environment || 'development' }}
+      branch: dev
+    secrets: inherit

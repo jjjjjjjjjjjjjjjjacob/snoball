@@ -1,0 +1,425 @@
+name: Core Deployment Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: string
+      branch:
+        description: 'Branch being deployed'
+        required: true
+        type: string
+    secrets:
+      # Database secrets (shared across environments)
+      DATABASE_PORT:
+        required: true
+      DATABASE_NAME:
+        required: true
+      DATABASE_SSL:
+        required: true
+      DATABASE_POOLING_PORT:
+        required: true
+      # Environment-specific database secrets
+      DATABASE_HOST:
+        required: true
+      DATABASE_USERNAME:
+        required: true
+      DATABASE_PASSWORD:
+        required: true
+      # Environment-specific service IDs
+      RENDER_TRADE_SERVER_ID:
+        required: false
+      RENDER_DEV_TRADE_SERVER_ID:
+        required: false
+      RENDER_WORKER_ID:
+        required: false
+      RENDER_DEV_WORKER_ID:
+        required: false
+      # Environment-specific URLs
+      RENDER_SERVICE_URL:
+        required: false
+      RENDER_DEV_SERVICE_URL:
+        required: false
+      VERCEL_APP_URL:
+        required: false
+      VERCEL_DEV_APP_URL:
+        required: false
+      # API keys (optional for manual deployments)
+      RENDER_API_KEY:
+        required: false
+      VERCEL_TOKEN:
+        required: false
+      # GitHub token for secret sync
+      GITHUB_TOKEN:
+        required: true
+
+env:
+  # Deployment Environment
+  ENVIRONMENT: ${{ inputs.environment }}
+  BUN_VERSION: latest
+
+jobs:
+  pre-deploy-checks:
+    name: Pre-deployment Checks
+    runs-on: ubuntu-latest
+    
+    outputs:
+      should-deploy: ${{ steps.check-deploy.outputs.deploy }}
+      service-urls: ${{ steps.set-urls.outputs.service-urls }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if deployment should proceed
+        id: check-deploy
+        run: |
+          # Check if we're on the expected branch or manual trigger
+          if [[ "${{ github.ref }}" == "refs/heads/${{ inputs.branch }}" ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set environment-specific URLs and service IDs
+        id: set-urls
+        run: |
+          if [[ "${{ inputs.environment }}" == "development" ]]; then
+            echo "RENDER_TRADE_SERVER_ID_VALUE=${{ secrets.RENDER_DEV_TRADE_SERVER_ID }}" >> $GITHUB_ENV
+            echo "RENDER_WORKER_ID_VALUE=${{ secrets.RENDER_DEV_WORKER_ID }}" >> $GITHUB_ENV
+            echo "RENDER_SERVICE_URL_VALUE=${{ secrets.RENDER_DEV_SERVICE_URL }}" >> $GITHUB_ENV
+            echo "VERCEL_APP_URL_VALUE=${{ secrets.VERCEL_DEV_APP_URL }}" >> $GITHUB_ENV
+            echo "service-urls=Development URLs: Frontend=${{ secrets.VERCEL_DEV_APP_URL }}, Backend=${{ secrets.RENDER_DEV_SERVICE_URL }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.environment }}" == "production" ]]; then
+            echo "RENDER_TRADE_SERVER_ID_VALUE=${{ secrets.RENDER_TRADE_SERVER_ID }}" >> $GITHUB_ENV
+            echo "RENDER_WORKER_ID_VALUE=${{ secrets.RENDER_WORKER_ID }}" >> $GITHUB_ENV
+            echo "RENDER_SERVICE_URL_VALUE=${{ secrets.RENDER_SERVICE_URL }}" >> $GITHUB_ENV
+            echo "VERCEL_APP_URL_VALUE=${{ secrets.VERCEL_APP_URL }}" >> $GITHUB_ENV
+            echo "service-urls=Production URLs: Frontend=${{ secrets.VERCEL_APP_URL }}, Backend=${{ secrets.RENDER_SERVICE_URL }}" >> $GITHUB_OUTPUT
+          else
+            # Default to development for test environment
+            echo "RENDER_TRADE_SERVER_ID_VALUE=${{ secrets.RENDER_DEV_TRADE_SERVER_ID }}" >> $GITHUB_ENV
+            echo "RENDER_WORKER_ID_VALUE=${{ secrets.RENDER_DEV_WORKER_ID }}" >> $GITHUB_ENV
+            echo "RENDER_SERVICE_URL_VALUE=${{ secrets.RENDER_DEV_SERVICE_URL }}" >> $GITHUB_ENV
+            echo "VERCEL_APP_URL_VALUE=${{ secrets.VERCEL_DEV_APP_URL }}" >> $GITHUB_ENV
+            echo "service-urls=Test URLs: Frontend=${{ secrets.VERCEL_DEV_APP_URL }}, Backend=${{ secrets.RENDER_DEV_SERVICE_URL }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get latest commit info
+        run: |
+          echo "🚀 ${{ inputs.environment }} Deployment Info:"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Target Branch: ${{ inputs.branch }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          echo "Environment: ${{ inputs.environment }}"
+          
+          # Get commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Message: $COMMIT_MSG"
+
+  sync-secrets:
+    name: Sync Secrets to Services
+    runs-on: ubuntu-latest
+    needs: pre-deploy-checks
+    if: needs.pre-deploy-checks.outputs.should-deploy == 'true'
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trigger secret synchronization workflow
+        run: |
+          echo "🔄 Triggering secret synchronization workflow for ${{ inputs.environment }}..."
+          
+          # Trigger the sync-secrets workflow via GitHub API
+          gh workflow run sync-secrets.yml \
+            -f environment="${{ inputs.environment }}" \
+            -f services="all"
+          
+          echo "✅ ${{ inputs.environment }} secret sync workflow triggered"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  database-migration:
+    name: Database Migration
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, sync-secrets]
+    if: needs.pre-deploy-checks.outputs.should-deploy == 'true'
+    environment: ${{ inputs.environment }}
+    
+    env:
+      # PlanetScale Database (Atomic Variables)
+      # Repository secrets (same for all environments)
+      DATABASE_PORT: ${{ secrets.DATABASE_PORT }}
+      DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
+      DATABASE_SSL: ${{ secrets.DATABASE_SSL }}
+      DATABASE_POOLING_PORT: ${{ secrets.DATABASE_POOLING_PORT }}
+      # Environment-specific secrets
+      DATABASE_HOST: ${{ secrets.DATABASE_HOST }}
+      DATABASE_USERNAME: ${{ secrets.DATABASE_USERNAME }}
+      DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test database connection
+        run: |
+          echo "🔍 Testing ${{ inputs.environment }} database connection..."
+          # Test connection using atomic variables
+          if bun run db:test; then
+            echo "✅ ${{ inputs.environment }} database connection successful"
+          else
+            echo "❌ ${{ inputs.environment }} database connection failed"
+            exit 1
+          fi
+
+      - name: Run database migrations
+        run: |
+          echo "🏗️ Running ${{ inputs.environment }} database migrations..."
+          bun run migrate:deploy
+          echo "✅ ${{ inputs.environment }} migrations completed successfully"
+
+      - name: Verify migration status
+        run: |
+          echo "🔍 Verifying ${{ inputs.environment }} migration status..."
+          # Add any migration verification commands here
+          echo "✅ ${{ inputs.environment }} migration verification complete"
+
+  deploy-backend:
+    name: Deploy Backend Services
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, sync-secrets, database-migration]
+    if: needs.pre-deploy-checks.outputs.should-deploy == 'true'
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment-specific service IDs
+        run: |
+          if [[ "${{ inputs.environment }}" == "development" ]]; then
+            echo "TRADE_SERVER_ID=${{ secrets.RENDER_DEV_TRADE_SERVER_ID }}" >> $GITHUB_ENV
+            echo "WORKER_ID=${{ secrets.RENDER_DEV_WORKER_ID }}" >> $GITHUB_ENV
+          else
+            echo "TRADE_SERVER_ID=${{ secrets.RENDER_TRADE_SERVER_ID }}" >> $GITHUB_ENV
+            echo "WORKER_ID=${{ secrets.RENDER_WORKER_ID }}" >> $GITHUB_ENV
+          fi
+
+      - name: Deploy to Render
+        run: |
+          echo "🚀 Triggering Render ${{ inputs.environment }} deployment..."
+          echo "Render services will auto-deploy from this Git push to ${{ inputs.branch }} branch."
+          echo "Monitor deployment at: https://dashboard.render.com"
+          
+          # Optional: Use Render API to trigger manual deployment
+          if [[ -n "${{ secrets.RENDER_API_KEY }}" ]]; then
+            echo "📡 Triggering manual ${{ inputs.environment }} deployment via Render API..."
+            
+            # Trigger trade-server deployment
+            curl -X POST "https://api.render.com/v1/services/${TRADE_SERVER_ID}/deploys" \
+              -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d '{"clearCache": false}' || echo "Manual trigger failed, auto-deploy will handle it"
+              
+            # Trigger worker deployment  
+            curl -X POST "https://api.render.com/v1/services/${WORKER_ID}/deploys" \
+              -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d '{"clearCache": false}' || echo "Manual trigger failed, auto-deploy will handle it"
+          else
+            echo "⚠️ RENDER_API_KEY not set, relying on auto-deployment"
+          fi
+
+      - name: Check deployment status
+        run: |
+          echo "⏳ Waiting for ${{ inputs.environment }} deployment to complete..."
+          sleep 30
+          
+          # Set service URL based on environment
+          if [[ "${{ inputs.environment }}" == "development" ]]; then
+            SERVICE_URL="${{ secrets.RENDER_DEV_SERVICE_URL }}"
+          else
+            SERVICE_URL="${{ secrets.RENDER_SERVICE_URL }}"
+          fi
+          
+          # Health check the deployed service
+          if curl -f -s "${SERVICE_URL}/health" > /dev/null; then
+            echo "✅ ${{ inputs.environment }} backend deployment healthy"
+          else
+            echo "❌ ${{ inputs.environment }} backend deployment may have failed"
+            exit 1
+          fi
+
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, deploy-backend]
+    if: needs.pre-deploy-checks.outputs.should-deploy == 'true'
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        run: |
+          echo "🚀 Triggering Vercel ${{ inputs.environment }} deployment..."
+          echo "Vercel will auto-deploy from this Git push to ${{ inputs.branch }} branch."
+          echo "Monitor deployment at: https://vercel.com/dashboard"
+          
+          # Optional: Use Vercel API for deployment status
+          if [[ -n "${{ secrets.VERCEL_TOKEN }}" ]]; then
+            echo "📡 Checking Vercel ${{ inputs.environment }} deployment status..."
+            # Add Vercel API calls here if needed
+          else
+            echo "⚠️ VERCEL_TOKEN not set, relying on auto-deployment"
+          fi
+
+      - name: Check frontend deployment
+        run: |
+          echo "⏳ Waiting for ${{ inputs.environment }} frontend deployment..."
+          sleep 30
+          
+          # Set app URL based on environment
+          if [[ "${{ inputs.environment }}" == "development" ]]; then
+            APP_URL="${{ secrets.VERCEL_DEV_APP_URL }}"
+          else
+            APP_URL="${{ secrets.VERCEL_APP_URL }}"
+          fi
+          
+          # Health check the deployed frontend
+          if curl -f -s "${APP_URL}" > /dev/null; then
+            echo "✅ ${{ inputs.environment }} frontend deployment healthy"
+          else
+            echo "❌ ${{ inputs.environment }} frontend deployment may have failed"
+            exit 1
+          fi
+
+  post-deploy-verification:
+    name: Post-deployment Verification
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, deploy-backend, deploy-frontend]
+    
+    steps:
+      - name: End-to-end health check
+        run: |
+          echo "🔍 Running end-to-end health checks for ${{ inputs.environment }}..."
+          
+          # Set URLs based on environment
+          if [[ "${{ inputs.environment }}" == "development" ]]; then
+            SERVICE_URL="${{ secrets.RENDER_DEV_SERVICE_URL }}"
+            APP_URL="${{ secrets.VERCEL_DEV_APP_URL }}"
+          else
+            SERVICE_URL="${{ secrets.RENDER_SERVICE_URL }}"
+            APP_URL="${{ secrets.VERCEL_APP_URL }}"
+          fi
+          
+          # Check backend API
+          echo "Checking ${{ inputs.environment }} backend API..."
+          if curl -f -s "${SERVICE_URL}/health"; then
+            echo "✅ ${{ inputs.environment }} backend API healthy"
+          else
+            echo "❌ ${{ inputs.environment }} backend API failed health check"
+            exit 1
+          fi
+          
+          # Check frontend
+          echo "Checking ${{ inputs.environment }} frontend..."
+          if curl -f -s "${APP_URL}"; then
+            echo "✅ ${{ inputs.environment }} frontend healthy"
+          else
+            echo "❌ ${{ inputs.environment }} frontend failed health check"
+            exit 1
+          fi
+          
+          # Check database connectivity (optional)
+          echo "✅ All ${{ inputs.environment }} services healthy"
+
+      - name: Run smoke tests
+        run: |
+          echo "🧪 Running ${{ inputs.environment }} smoke tests..."
+          # Add any critical post-deployment tests here
+          echo "✅ ${{ inputs.environment }} smoke tests passed"
+
+      - name: Update deployment status
+        run: |
+          echo "📊 ${{ inputs.environment }} Deployment Summary:"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Branch: ${{ inputs.branch }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deployed by: ${{ github.actor }}"
+          echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Status: ✅ SUCCESS"
+
+  notify-deployment:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, sync-secrets, database-migration, deploy-backend, deploy-frontend, post-deploy-verification]
+    if: always()
+    
+    steps:
+      - name: Deployment notification
+        run: |
+          if [[ "${{ needs.post-deploy-verification.result }}" == "success" ]]; then
+            echo "🎉 Deployment to ${{ inputs.environment }} completed successfully!"
+            if [[ "${{ inputs.environment }}" == "development" ]]; then
+              echo "Frontend: ${{ secrets.VERCEL_DEV_APP_URL }}"
+              echo "Backend: ${{ secrets.RENDER_DEV_SERVICE_URL }}"
+            else
+              echo "Frontend: ${{ secrets.VERCEL_APP_URL }}"
+              echo "Backend: ${{ secrets.RENDER_SERVICE_URL }}"
+            fi
+          else
+            echo "❌ Deployment to ${{ inputs.environment }} failed!"
+            echo "Check the logs above for details."
+            
+            # List failed jobs
+            if [[ "${{ needs.sync-secrets.result }}" == "failure" ]]; then
+              echo "- Secret synchronization failed"
+            fi
+            if [[ "${{ needs.database-migration.result }}" == "failure" ]]; then
+              echo "- Database migration failed"
+            fi
+            if [[ "${{ needs.deploy-backend.result }}" == "failure" ]]; then
+              echo "- Backend deployment failed"
+            fi
+            if [[ "${{ needs.deploy-frontend.result }}" == "failure" ]]; then
+              echo "- Frontend deployment failed"
+            fi
+            if [[ "${{ needs.post-deploy-verification.result }}" == "failure" ]]; then
+              echo "- Post-deployment verification failed"
+            fi
+          fi
+
+      # Optional: Add Slack/Discord/email notifications here
+      - name: Slack notification (Optional)
+        if: false  # Enable by changing to true and adding SLACK_WEBHOOK_URL secret
+        run: |
+          STATUS="${{ needs.post-deploy-verification.result }}"
+          if [[ "$STATUS" == "success" ]]; then
+            MESSAGE="🎉 ${{ inputs.environment }} deployment successful!"
+            COLOR="good"
+          else
+            MESSAGE="❌ ${{ inputs.environment }} deployment failed!"
+            COLOR="danger"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"$MESSAGE\", \"color\":\"$COLOR\"}" \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"

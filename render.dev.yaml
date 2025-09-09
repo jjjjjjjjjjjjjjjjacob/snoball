@@ -1,0 +1,103 @@
+# Render Development Environment for Snoball Trading Platform
+# This configuration deploys from 'dev' branch with development-specific settings
+
+services:
+  # Development Trade Server - WebSocket connections to Alpaca Paper Trading
+  - type: web
+    name: snoball-dev-trade-server
+    runtime: docker
+    dockerfilePath: ./apps/trade-server/Dockerfile.render
+    plan: free # Use free tier for development
+    region: ohio # Central US for optimal trading latency
+    branch: dev # Deploy from development branch
+
+    # Auto-deploy on dev branch push
+    autoDeploy: true
+
+    # Health check configuration
+    healthCheckPath: /health
+
+    # Environment variables (Dockerfile handles service type detection)
+    envVars:
+      - key: NODE_ENV
+        value: development
+      - key: PORT
+        value: 9090
+      - key: ENVIRONMENT
+        value: development
+      - key: ALPACA_ENDPOINT
+        value: https://paper-api.alpaca.markets # Paper trading only
+
+    # Scaling configuration (minimal for dev)
+    numInstances: 1
+
+  # Development Background Worker for Order Processing
+  - type: worker
+    name: snoball-dev-worker
+    runtime: docker
+    dockerfilePath: ./apps/trade-server/Dockerfile.render
+    plan: free # Use free tier for development
+    region: ohio
+    branch: dev # Deploy from development branch
+
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: development
+      - key: ENVIRONMENT
+        value: development
+      - key: WORKER_TYPE
+        value: order_processor
+      - key: ALPACA_ENDPOINT
+        value: https://paper-api.alpaca.markets # Paper trading only
+
+    numInstances: 1
+
+  # Development Cron Job for Market Analysis (less frequent)
+  - type: cron
+    name: snoball-dev-analysis
+    runtime: docker
+    dockerfilePath: ./apps/trade-server/Dockerfile.render
+    plan: free # Use free tier for development
+    region: ohio
+    branch: dev # Deploy from development branch
+
+    schedule: "0 */2 * * *" # Every 2 hours (less frequent than production)
+
+    envVars:
+      - key: NODE_ENV
+        value: development
+      - key: ENVIRONMENT
+        value: development
+      - key: JOB_TYPE
+        value: market_analysis
+      - key: ALPACA_ENDPOINT
+        value: https://paper-api.alpaca.markets # Paper trading only
+
+  # Development Redis Cache (using Render's native Redis)
+  - type: redis
+    name: snoball-dev-redis
+    plan: free # Use free tier for development
+    region: ohio
+
+    # Redis configuration (smaller limits for dev)
+    maxmemoryPolicy: allkeys-lru
+
+    # Access control
+    ipAllowList: [] # Will be set to services automatically
+
+# Development Environment Notes:
+# - Uses 'dev' branch for deployment
+# - Smaller resource allocation (free/starter tiers)
+# - Connects to PlanetScale dev database branch
+# - Uses paper trading API endpoints only
+# - Less frequent cron jobs to save resources
+# - Separate service names to avoid production conflicts
+
+# Database configuration (external - PlanetScale dev branch)
+# Set DATABASE_* environment variables to point to dev branch
+
+# Notifications are configured in the Render dashboard:
+# Dashboard → Service → Settings → Notifications
+# Available notification types: email, Slack, Discord, webhook

@@ -231,7 +231,185 @@ ANTHROPIC_API_KEY=your_anthropic_key
 
 ---
 
-## 5. Production Deployment
+## 5. Multi-Environment Deployment Strategy
+
+Snoball uses a multi-environment approach with separate configurations for development and production deployments, ensuring complete isolation and independent scaling.
+
+### 5.1. Environment Overview
+
+**Development Environment:**
+- **Branch**: `dev`
+- **Services**: `snoball-dev-*` (isolated from production)
+- **Database**: PlanetScale dev branch
+- **Resources**: Free/starter tiers for cost efficiency
+- **API Endpoints**: Paper trading only
+- **Deployment**: Auto-deploy from `dev` branch pushes
+
+**Production Environment:**
+- **Branch**: `main`  
+- **Services**: `snoball-prod-*` (production-ready)
+- **Database**: PlanetScale main branch
+- **Resources**: Optimized production tiers
+- **API Endpoints**: Live trading capable (with proper credentials)
+- **Deployment**: Auto-deploy from `main` branch pushes
+
+### 5.2. Deployment Configurations
+
+#### Development Configuration (`render.dev.yaml`)
+```yaml
+services:
+  - type: web
+    name: snoball-dev-trade-server
+    plan: free
+    branch: dev
+    envVars:
+      - key: ENVIRONMENT
+        value: development
+      - key: ALPACA_ENDPOINT
+        value: https://paper-api.alpaca.markets
+```
+
+#### Production Configuration (`render.yaml`)
+```yaml
+services:
+  - type: web
+    name: snoball-prod-trade-server
+    plan: starter
+    branch: main
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+```
+
+### 5.3. Branch-Based Workflow
+
+**Development Workflow:**
+1. Create feature branch from `dev`
+2. Make changes and test locally
+3. Push to feature branch (triggers CI tests)
+4. Create PR to `dev` branch
+5. Merge to `dev` → triggers development deployment
+6. Test in development environment
+
+**Production Workflow:**
+1. Create PR from `dev` to `main`
+2. Review and approve changes
+3. Merge to `main` → triggers production deployment
+4. Monitor production deployment
+5. Verify production health checks
+
+### 5.4. Environment-Specific Secrets
+
+**GitHub Repository Secrets** (shared across all environments):
+```bash
+DATABASE_PORT=5432
+DATABASE_NAME=snoball-prod
+DATABASE_SSL=require
+DATABASE_POOLING_PORT=6432
+NEXTAUTH_SECRET=...
+ENCRYPTION_KEY=...
+WORKOS_API_KEY=...
+WORKOS_CLIENT_ID=...
+```
+
+**GitHub Environment Secrets** (environment-specific):
+
+**Development Environment:**
+```bash
+DATABASE_HOST=aws-us-east-2-2.pg.psdb.cloud     # Dev branch host
+DATABASE_USERNAME=pscale_api_dev_xxxxx           # Dev branch username
+DATABASE_PASSWORD=pscale_pw_dev_xxxxx            # Dev branch password
+RENDER_DEV_TRADE_SERVER_ID=srv-xxxxx            # Dev service ID
+RENDER_DEV_WORKER_ID=srv-yyyyy                  # Dev worker ID
+RENDER_DEV_SERVICE_URL=https://snoball-dev.onrender.com
+VERCEL_DEV_APP_URL=https://snoball-dev.vercel.app
+```
+
+**Production Environment:**
+```bash
+DATABASE_HOST=aws-us-east-2-1.pg.psdb.cloud     # Main branch host
+DATABASE_USERNAME=pscale_api_prod_xxxxx          # Main branch username
+DATABASE_PASSWORD=pscale_pw_prod_xxxxx           # Main branch password
+RENDER_TRADE_SERVER_ID=srv-xxxxx                # Prod service ID
+RENDER_WORKER_ID=srv-yyyyy                      # Prod worker ID
+RENDER_SERVICE_URL=https://snoball.onrender.com
+VERCEL_APP_URL=https://snoball.vercel.app
+```
+
+### 5.5. Secret Synchronization Per Environment
+
+**Sync Development Secrets:**
+```bash
+# Manual sync to development services
+gh workflow run sync-secrets.yml \
+  -f environment="development" \
+  -f services="all"
+
+# Sync only to Render dev services
+gh workflow run sync-secrets.yml \
+  -f environment="development" \
+  -f services="render"
+```
+
+**Sync Production Secrets:**
+```bash
+# Manual sync to production services
+gh workflow run sync-secrets.yml \
+  -f environment="production" \
+  -f services="all"
+```
+
+### 5.6. Deployment Commands
+
+**Deploy Development:**
+```bash
+# Automatic: push to dev branch
+git checkout dev
+git push origin dev
+
+# Manual: trigger workflow
+gh workflow run deploy-dev.yml -f environment="development"
+```
+
+**Deploy Production:**
+```bash
+# Automatic: push to main branch
+git checkout main
+git push origin main
+
+# Manual: trigger workflow
+gh workflow run deploy-prod.yml -f environment="production"
+```
+
+### 5.7. Service URLs by Environment
+
+**Development URLs:**
+- **Backend API**: `https://snoball-dev-trade-server.onrender.com`
+- **Frontend**: `https://snoball-dev.vercel.app`
+- **Redis**: Auto-provided by `snoball-dev-redis`
+
+**Production URLs:**
+- **Backend API**: `https://snoball-prod-trade-server.onrender.com`
+- **Frontend**: `https://snoball.vercel.app`
+- **Redis**: Auto-provided by `snoball-prod-redis`
+
+### 5.8. Cost Optimization
+
+**Development Environment** (~$0-15/month):
+- Uses free tiers where possible
+- Minimal resource allocation
+- Less frequent cron jobs
+- Paper trading API only
+
+**Production Environment** (~$100-150/month):
+- Optimized for performance and reliability
+- Production-grade resources
+- Full cron job frequency
+- Live trading capabilities
+
+---
+
+## 6. Setting Up Your Render Services
 
 ### Backend Deployment (Render)
 
@@ -324,7 +502,7 @@ ANTHROPIC_API_KEY=your_anthropic_key
 
 ---
 
-## 6. Environment Variables Reference
+## 7. Environment Variables Reference
 
 ### Required for All Environments:
 
@@ -380,11 +558,11 @@ ANTHROPIC_API_KEY=sk-ant-xxx
 
 ---
 
-## 7. Platform Dashboard Environment Setup
+## 8. Platform Dashboard Environment Setup
 
 After setting up your services, you need to configure environment variables in each platform's dashboard. Here's a comprehensive guide for each platform:
 
-### 7.1. Render Dashboard Setup
+### 8.1. Render Dashboard Setup
 
 **Location**: [Render Dashboard](https://dashboard.render.com) → Your Service → Environment
 
@@ -569,11 +747,11 @@ curl -H "Authorization: Bearer $ALPACA_API_KEY" https://paper-api.alpaca.markets
 
 ---
 
-## 8. GitHub Actions Setup
+## 9. GitHub Actions Setup
 
 GitHub Actions handles CI/CD for the project, running tests and deploying to production. You need to configure secrets and environment variables in your GitHub repository.
 
-### 8.1. GitHub Environments Setup
+### 9.1. GitHub Environments Setup
 
 **Location**: GitHub Repository → Settings → Environments
 
@@ -581,7 +759,7 @@ GitHub Actions handles CI/CD for the project, running tests and deploying to pro
 1. **test** - For CI testing
 2. **production** - For production deployment
 
-### 8.2. Required GitHub Secrets
+### 9.2. Required GitHub Secrets
 
 **Location**: GitHub Repository → Settings → Secrets and variables → Actions
 
@@ -642,7 +820,7 @@ VERCEL_APP_URL                  # https://your-app.vercel.app
 SLACK_WEBHOOK_URL               # Slack webhook for deployment notifications
 ```
 
-### 8.3. How to Set Up GitHub Environments and Secrets
+### 9.3. How to Set Up GitHub Environments and Secrets
 
 1. **Create GitHub Environments**:
    - Go to: GitHub Repository → Settings → Environments
@@ -674,7 +852,7 @@ SLACK_WEBHOOK_URL               # Slack webhook for deployment notifications
      - `ALPACA_API_KEY` (if same for test/prod)
      - `WORKOS_API_KEY`
 
-### 8.4. Generating Required Secrets
+### 9.4. Generating Required Secrets
 
 **Generate Encryption Keys:**
 ```bash
@@ -704,7 +882,7 @@ pscale connect snoball-prod main --format=connection-string
 # Service ID: srv-abc123def456
 ```
 
-### 8.5. Environment-Specific Configuration
+### 9.5. Environment-Specific Configuration
 
 **CI/Testing Environment:**
 - Uses local PostgreSQL and Redis containers
@@ -716,7 +894,7 @@ pscale connect snoball-prod main --format=connection-string
 - Triggers deployment to Render and Vercel
 - Runs post-deployment health checks
 
-### 8.6. How GitHub Actions Uses Environments
+### 9.6. How GitHub Actions Uses Environments
 
 **CI Workflow** uses `environment: test`:
 ```yaml
@@ -750,7 +928,7 @@ jobs:
     environment: ${{ github.event.inputs.environment }}  # Dynamic environment
 ```
 
-### 8.7. GitHub Actions Workflows
+### 9.7. GitHub Actions Workflows
 
 #### **CI Workflow (`.github/workflows/ci.yml`)**
 **Triggers**: Pull requests and pushes to main/develop
@@ -763,16 +941,77 @@ jobs:
 - ✅ Build verification
 - ✅ Performance checks
 
-#### **Deploy Workflow (`.github/workflows/deploy.yml`)**
-**Triggers**: Pushes to main branch or manual dispatch
-**Environment**: `production` (or user-selected)
+#### **Reusable Deployment Workflow (`.github/workflows/deploy-core.yml`)**
+**Type**: Reusable workflow called by environment-specific triggers
+**Parameters**: `environment`, `branch`
 **Jobs**:
 - ✅ Pre-deployment checks
+- ✅ Secret synchronization
 - ✅ Database migrations
 - ✅ Backend deployment (Render)
 - ✅ Frontend deployment (Vercel)
 - ✅ Post-deployment verification
 - ✅ Deployment notifications
+
+#### **Development Deployment Trigger (`.github/workflows/deploy-dev.yml`)**
+**Triggers**: Pushes to `dev` branch or manual dispatch
+**Environment**: `development` (or user-selected: development/test)
+**Implementation**: Calls `deploy-core.yml` with `environment: development, branch: dev`
+
+#### **Production Deployment Trigger (`.github/workflows/deploy-prod.yml`)**
+**Triggers**: Pushes to `main` branch or manual dispatch
+**Environment**: `production` (or user-selected: production/staging)
+**Implementation**: Calls `deploy-core.yml` with `environment: production, branch: main`
+
+#### **Secret Synchronization Workflow (`.github/workflows/sync-secrets.yml`)**
+**Triggers**: Manual dispatch or called by deployment workflows
+**Environment**: User-selected (test/development/production)
+**Jobs**:
+- ✅ Sync secrets to Render services
+- ✅ Sync secrets to Vercel services
+- ✅ Validate synchronization results
+
+#### **Reusable Workflow Architecture**
+
+The deployment system uses GitHub Actions' reusable workflow feature to eliminate code duplication:
+
+```mermaid
+graph TB
+    A[Push to dev branch] --> B[deploy-dev.yml]
+    C[Push to main branch] --> D[deploy-prod.yml]
+    E[Manual Trigger] --> B
+    F[Manual Trigger] --> D
+    
+    B --> G[deploy-core.yml]
+    D --> G
+    
+    G --> H[Pre-deploy Checks]
+    G --> I[Secret Sync]
+    G --> J[Database Migration]
+    G --> K[Backend Deploy]
+    G --> L[Frontend Deploy]
+    G --> M[Post-deploy Verification]
+    G --> N[Notifications]
+```
+
+**Benefits:**
+- ✅ **DRY Principle**: Single deployment logic for all environments
+- ✅ **Consistency**: Identical deployment process across environments
+- ✅ **Maintainability**: Fix bugs or add features in one place
+- ✅ **Scalability**: Easy to add new environments (staging, preview, etc.)
+- ✅ **Environment Isolation**: Environment-specific configuration via parameters
+
+**Example Usage:**
+```yaml
+# deploy-dev.yml (minimal trigger workflow)
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-core.yml
+    with:
+      environment: development
+      branch: dev
+    secrets: inherit
+```
 
 ### 8.8. Secret Synchronization Strategy
 
@@ -957,9 +1196,9 @@ gh secret list
 
 ---
 
-## 9. Verifying Your Setup
+## 10. Verifying Your Setup
 
-### 9.1. Secret Configuration Validation
+### 10.1. Secret Configuration Validation
 
 **Validate all secrets across all services:**
 ```bash
@@ -1012,7 +1251,7 @@ bun run secrets:validate:vercel
 4. Deploy to production: git push origin main
 ```
 
-### 9.2. Application Testing
+### 10.2. Application Testing
 
 Run these commands to verify everything works:
 
@@ -1038,7 +1277,7 @@ bun run lint
 
 ---
 
-## 10. Security Best Practices
+## 11. Security Best Practices
 
 1. **API Keys**: Never commit `.env` files to version control
 2. **Encryption**: Use strong encryption keys for sensitive data
@@ -1057,7 +1296,7 @@ bun run lint
 
 ---
 
-## 11. Cost Estimates
+## 12. Cost Estimates
 
 ### Development Environment (Free Tiers)
 - PlanetScale: Free (5GB storage, 1 billion row reads/month)
@@ -1083,7 +1322,7 @@ bun run lint
 
 ---
 
-## 12. Monitoring & Observability
+## 13. Monitoring & Observability
 
 ### Built-in Platform Features:
 - **Render**: Service metrics, logs, health checks
@@ -1099,7 +1338,7 @@ bun run lint
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 ### Common Issues:
 
@@ -1132,7 +1371,7 @@ ws.onopen = () => console.log('Connected');
 
 ---
 
-## 14. Migration from AWS
+## 15. Migration from AWS
 
 If migrating from AWS infrastructure:
 
@@ -1144,7 +1383,7 @@ If migrating from AWS infrastructure:
 
 ---
 
-## 15. Support & Resources
+## 16. Support & Resources
 
 - [PlanetScale Docs](https://planetscale.com/docs)
 - [Render Docs](https://render.com/docs)
