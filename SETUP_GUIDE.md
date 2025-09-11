@@ -231,11 +231,42 @@ ANTHROPIC_API_KEY=your_anthropic_key
 
 ---
 
-## 5. Multi-Environment Deployment Strategy
+## 5. Secret Management Philosophy
+
+### Single Source of Truth: GitHub
+
+Snoball uses **GitHub as the single source of truth** for all application secrets and environment variables. This approach provides:
+
+- **Version Control**: All secret changes are tracked and auditable
+- **Consistency**: Identical configurations across all environments
+- **Automation**: Secrets automatically sync to services during deployment
+- **Security**: No manual configuration reduces human error
+- **Disaster Recovery**: All configurations backed up in version control
+
+### How It Works
+
+1. **GitHub Repository & Environment Secrets**: Store all secrets in GitHub
+2. **Automatic Synchronization**: CI/CD syncs secrets to Render/Vercel during deployment
+3. **No Manual Configuration**: Never manually configure secrets in service dashboards
+4. **Environment Isolation**: Use GitHub environments for environment-specific values
+
+### Benefits Over Manual Configuration
+
+| Manual Dashboard Config | GitHub-Centric Approach |
+|-------------------------|-------------------------|
+| ❌ Configuration drift | ✅ Consistent across deployments |
+| ❌ No audit trail | ✅ Full change history |
+| ❌ Error-prone | ✅ Automated and reliable |
+| ❌ No backup | ✅ Version controlled |
+| ❌ Manual sync required | ✅ Automatic during deployment |
+
+---
+
+## 6. Multi-Environment Deployment Strategy
 
 Snoball uses a multi-environment approach with separate configurations for development and production deployments, ensuring complete isolation and independent scaling.
 
-### 5.1. Environment Overview
+### 6.1. Environment Overview
 
 **Development Environment:**
 - **Branch**: `dev`
@@ -253,56 +284,67 @@ Snoball uses a multi-environment approach with separate configurations for devel
 - **API Endpoints**: Live trading capable (with proper credentials)
 - **Deployment**: Auto-deploy from `main` branch pushes
 
-### 5.2. Deployment Configurations
+### 6.2. Deployment Configurations
 
-The project uses a **single environment-aware `render.yaml`** that works for both development and production environments through Render's Blueprint variable system.
+The project uses **CI/CD-generated configurations** from a single template, ensuring consistent infrastructure across environments while maintaining complete isolation.
 
-#### Unified Configuration (`render.yaml`)
+#### Template-Based Configuration (`render.yaml.template`)
+
+The project uses a template file with placeholders that are replaced by CI/CD during deployment:
+
 ```yaml
 services:
   - type: web
-    name: ${SERVICE_PREFIX:-snoball-prod}-trade-server
-    plan: ${PLAN_TIER:-starter}
-    branch: ${DEPLOY_BRANCH:-main}
+    name: {{SERVICE_PREFIX}}-trade-server
+    plan: {{PLAN_TIER}}
+    branch: {{DEPLOY_BRANCH}}
     envVars:
       - key: NODE_ENV
-        value: ${NODE_ENVIRONMENT:-production}
+        value: {{NODE_ENVIRONMENT}}
       - key: ENVIRONMENT
-        value: ${APP_ENVIRONMENT:-production}
+        value: {{APP_ENVIRONMENT}}
       - key: ALPACA_ENDPOINT
-        value: ${ALPACA_ENDPOINT:-https://api.alpaca.markets}
+        value: {{ALPACA_ENDPOINT}}
 
   - type: cron
-    name: ${SERVICE_PREFIX:-snoball-prod}-analysis
-    schedule: ${CRON_SCHEDULE:-*/30 * * * *}
+    name: {{SERVICE_PREFIX}}-analysis
+    schedule: {{CRON_SCHEDULE}}
     # ... rest of configuration
 ```
 
-#### Blueprint Variable Configuration
+#### CI/CD Generation Process
 
-**Production Blueprint Variables:**
-```bash
-SERVICE_PREFIX=snoball-prod
-PLAN_TIER=starter
-DEPLOY_BRANCH=main
-NODE_ENVIRONMENT=production
-APP_ENVIRONMENT=production
-CRON_SCHEDULE=*/30 * * * *
-ALPACA_ENDPOINT=https://api.alpaca.markets
-REDIS_PLAN=starter
-```
+During deployment, GitHub Actions runs `scripts/generate-render-yaml.sh` to create environment-specific configurations:
 
-**Development Blueprint Variables:**
+**Production Generation:**
 ```bash
-SERVICE_PREFIX=snoball-dev
-PLAN_TIER=free
-DEPLOY_BRANCH=dev
-NODE_ENVIRONMENT=development
-APP_ENVIRONMENT=development
-CRON_SCHEDULE=0 */2 * * *
-ALPACA_ENDPOINT=https://paper-api.alpaca.markets
-REDIS_PLAN=free
+./scripts/generate-render-yaml.sh prod
 ```
+Produces:
+- **Services**: `snoball-prod-*` prefixed names
+- **Plans**: `starter` tier for production workloads
+- **Branch**: `main` for production deployments
+- **Schedule**: `"*/30 * * * *"` (every 30 minutes)
+- **API**: Live trading endpoints (`https://api.alpaca.markets`)
+
+**Development Generation:**
+```bash
+./scripts/generate-render-yaml.sh dev
+```
+Produces:
+- **Services**: `snoball-dev-*` prefixed names
+- **Plans**: `free` tier for cost efficiency
+- **Branch**: `dev` for development deployments
+- **Schedule**: `"0 */4 * * *"` (every 4 hours)
+- **API**: Paper trading endpoints (`https://paper-api.alpaca.markets`)
+
+#### Advantages of CI/CD Generation
+
+1. **Single Source of Truth**: One template file maintains all infrastructure
+2. **No Version Control Conflicts**: Each branch gets its own generated `render.yaml`
+3. **Environment Isolation**: Completely separate service names and configurations
+4. **Easy Maintenance**: Update template once, all environments benefit
+5. **Flexible Scaling**: Easy to add new environments or modify existing ones
 
 ### 5.3. Branch-Based Workflow
 
@@ -436,41 +478,56 @@ gh workflow run deploy-prod.yml -f environment="production"
 
 ### Backend Deployment (Render)
 
-#### 6.1. Create Production Blueprint
+#### 6.1. Initial Setup - Generate Configuration
+
+Before creating Blueprints, you need to generate the initial `render.yaml` files:
+
+1. **Generate Production Configuration** (on main branch)
+   ```bash
+   git checkout main
+   ./scripts/generate-render-yaml.sh prod
+   git add render.yaml
+   git commit -m "Generate production render.yaml"
+   git push origin main
+   ```
+
+2. **Generate Development Configuration** (on dev branch)
+   ```bash
+   git checkout dev
+   ./scripts/generate-render-yaml.sh dev
+   git add render.yaml
+   git commit -m "Generate development render.yaml"
+   git push origin dev
+   ```
+
+> **Note**: After initial setup, CI/CD will automatically regenerate `render.yaml` on each deployment.
+
+#### 6.2. Create Production Blueprint
 
 1. **Connect Repository**
    - Go to [Render Dashboard](https://dashboard.render.com)
    - Click "New" → "Blueprint"
    - Connect your GitHub repository
-   - Select the repository containing `render.yaml`
+   - Select the repository containing the generated `render.yaml`
 
-2. **Configure Blueprint Name and Branch**
+2. **Configure Blueprint Settings**
    - Blueprint Name: `snoball-production`
    - Branch: Select `main`
+   - Blueprint File: `render.yaml` (default)
 
-3. **Set Blueprint Environment Variables**
-   
-   Render will detect undefined variables in your `render.yaml` and prompt you to set them. Configure these values:
+3. **Review Generated Services**
+   Render automatically creates from the generated `render.yaml`:
+   - `snoball-prod-trade-server` (Web Service on port 9090, starter plan)
+   - `snoball-prod-worker` (Background Worker, starter plan)
+   - `snoball-prod-analysis` (Cron Job - every 30 minutes, starter plan)
+   - `snoball-prod-redis` (Redis Cache, starter plan)
 
-   ```bash
-   SERVICE_PREFIX=snoball-prod
-   PLAN_TIER=starter
-   DEPLOY_BRANCH=main
-   NODE_ENVIRONMENT=production
-   APP_ENVIRONMENT=production
-   CRON_SCHEDULE=*/30 * * * *
-   ALPACA_ENDPOINT=https://api.alpaca.markets
-   REDIS_PLAN=starter
-   ```
+4. **Deploy Blueprint**
+   - Review the service configuration
+   - Click "Apply" to create all services
+   - Render will deploy from the `main` branch
 
-4. **Review Generated Services**
-   Render automatically creates from `render.yaml`:
-   - `snoball-prod-trade-server` (Web Service on port 9090)
-   - `snoball-prod-worker` (Background Worker)
-   - `snoball-prod-analysis` (Cron Job - every 30 minutes)
-   - `snoball-prod-redis` (Redis Cache)
-
-#### 6.2. Create Development Blueprint
+#### 6.3. Create Development Blueprint
 
 1. **Create Second Blueprint**
    - Click "New" → "Blueprint"
@@ -478,90 +535,98 @@ gh workflow run deploy-prod.yml -f environment="production"
    - Blueprint Name: `snoball-development`
    - Branch: Select `dev`
 
-2. **Set Development Blueprint Variables**
-
-   ```bash
-   SERVICE_PREFIX=snoball-dev
-   PLAN_TIER=free
-   DEPLOY_BRANCH=dev
-   NODE_ENVIRONMENT=development
-   APP_ENVIRONMENT=development
-   CRON_SCHEDULE=0 */2 * * *
-   ALPACA_ENDPOINT=https://paper-api.alpaca.markets
-   REDIS_PLAN=free
-   ```
+2. **Configure Blueprint Settings**
+   - Blueprint File: `render.yaml` (the dev branch has its own generated version)
+   - This ensures development uses the dev-specific configuration
 
 3. **Review Generated Development Services**
+   Render creates from the dev branch's `render.yaml`:
    - `snoball-dev-trade-server` (Web Service - free tier)
    - `snoball-dev-worker` (Background Worker - free tier)
-   - `snoball-dev-analysis` (Cron Job - every 2 hours)
+   - `snoball-dev-analysis` (Cron Job - every 4 hours, free tier)
    - `snoball-dev-redis` (Redis Cache - free tier)
 
-#### 6.3. Understanding Blueprint vs Service Variables
+4. **Deploy Development Blueprint**
+   - Review the service configuration
+   - Click "Apply" to create development services
+   - Render will deploy from the `dev` branch using paper trading endpoints
 
-**Blueprint Variables** (set during Blueprint creation):
-- Control infrastructure configuration (service names, plans, branches)
-- Defined in `render.yaml` using `${VARIABLE_NAME:-default}` syntax
-- Set once per Blueprint, affect all services in the Blueprint
-- Examples: `SERVICE_PREFIX`, `PLAN_TIER`, `DEPLOY_BRANCH`
+#### 6.4. Automatic Secret Synchronization
 
-**Service Environment Variables** (set per service after creation):
-- Control application behavior (database credentials, API keys)
-- Set individually for each service in Render dashboard
-- Can be different for each service within the same Blueprint
-- Examples: `DATABASE_PASSWORD`, `WORKOS_API_KEY`, `NEXTAUTH_SECRET`
+> **⚠️ IMPORTANT**: Do NOT manually configure environment variables in the Render dashboard. All secrets are automatically synchronized from GitHub during deployment.
 
-#### 6.4. Set Service-Level Environment Variables
-   
-   In Render dashboard, go to each service → Environment → Add Environment Variable:
-   
-   **Database Configuration (use atomic variables):**
+**How Secrets Are Managed:**
+
+1. **GitHub Repository/Environment Secrets**: Add all secrets to GitHub (see Section 9.2)
+2. **Automatic Sync**: CI/CD automatically syncs secrets to Render services during deployment
+3. **No Manual Configuration**: Never use Render dashboard for environment variables
+4. **Verification Only**: Use Render dashboard only to verify that secrets were synced correctly
+
+**Secrets That Get Automatically Synced:**
+
+   **Database Configuration:**
    ```bash
-   DATABASE_HOST=aws-us-east-1-portal.23.psdb.cloud
-   DATABASE_PORT=5432
-   DATABASE_NAME=snoball-prod
-   DATABASE_USERNAME=your_planetscale_username
-   DATABASE_PASSWORD=your_planetscale_password
-   DATABASE_SSL=require
-   DATABASE_POOLING_PORT=6432
+   DATABASE_HOST              # From GitHub environment secrets
+   DATABASE_PORT              # From GitHub repository secrets
+   DATABASE_NAME              # From GitHub repository secrets
+   DATABASE_USERNAME          # From GitHub environment secrets
+   DATABASE_PASSWORD          # From GitHub environment secrets
+   DATABASE_SSL               # From GitHub repository secrets
+   DATABASE_POOLING_PORT      # From GitHub repository secrets
    ```
    
    **Trading & Authentication:**
    ```bash
-   ALPACA_API_KEY=your_alpaca_key
-   ALPACA_SECRET_KEY=your_alpaca_secret
-   ALPACA_ENDPOINT=https://paper-api.alpaca.markets
-   WORKOS_API_KEY=your_workos_key
-   WORKOS_CLIENT_ID=your_workos_client_id
-   WORKOS_WEBHOOK_SECRET=your_workos_webhook_secret
+   ALPACA_API_KEY            # From GitHub repository secrets
+   ALPACA_SECRET_KEY         # From GitHub repository secrets
+   WORKOS_API_KEY            # From GitHub repository secrets
+   WORKOS_CLIENT_ID          # From GitHub repository secrets
+   WORKOS_WEBHOOK_SECRET     # From GitHub repository secrets
    ```
    
    **Security & Application:**
    ```bash
-   ENCRYPTION_KEY=$(openssl rand -hex 32)
-   NEXTAUTH_SECRET=$(openssl rand -hex 32)
-   NODE_ENV=production
-   ENVIRONMENT=production
+   ENCRYPTION_KEY            # From GitHub repository secrets
+   NEXTAUTH_SECRET           # From GitHub repository secrets
+   NODE_ENV                  # Set by render.yaml template
+   ENVIRONMENT               # Set by render.yaml template
    ```
 
-#### 6.5. Updating Blueprint Variables
+**To Add or Update Secrets:**
+1. Add/update secret in GitHub repository or environment settings
+2. Push code changes or manually trigger deployment
+3. Secrets automatically sync to all Render services
+4. Verify sync completed successfully in deployment logs
 
-If you need to change Blueprint variables (like upgrading plans or changing schedules):
+**Troubleshooting Secret Sync:**
+- Check GitHub Actions logs for sync failures
+- Verify secret names match exactly (case-sensitive)
+- Ensure GitHub secrets are accessible to the workflow
+- See Section 8.8 for detailed troubleshooting
 
-1. **Access Blueprint Settings**
-   - Go to Render Dashboard → Blueprints
-   - Select your Blueprint (`snoball-production` or `snoball-development`)
-   - Click "Settings" tab
+#### 6.5. Updating Infrastructure Configuration
 
-2. **Update Variables**
-   - Modify Blueprint environment variables as needed
-   - Example: Change `PLAN_TIER` from `free` to `starter`
+To modify infrastructure settings (like upgrading plans or changing schedules):
 
-3. **Apply Changes**
-   - Click "Update Blueprint"
-   - Render will update all affected services automatically
+1. **Update Template or Script**
+   - For permanent changes: Edit `render.yaml.template`
+   - For environment-specific changes: Edit `scripts/generate-render-yaml.sh`
 
-#### 6.6. Blueprint Variable Reference
+2. **Test Locally**
+   ```bash
+   # Generate and review the configuration
+   ./scripts/generate-render-yaml.sh dev
+   cat render.yaml  # Review generated configuration
+   ```
+
+3. **Deploy Changes**
+   - Commit template/script changes to your branch
+   - Push to trigger CI/CD, which will regenerate `render.yaml`
+   - Render will automatically sync and apply changes
+
+#### 6.6. Template Variable Reference
+
+Variables defined in `scripts/generate-render-yaml.sh`:
 
 **Infrastructure Variables:**
 ```bash
@@ -569,15 +634,17 @@ SERVICE_PREFIX       # Service name prefix (snoball-prod, snoball-dev)
 PLAN_TIER           # Render plan (free, starter, standard, pro)
 DEPLOY_BRANCH       # Git branch (main, dev)
 REDIS_PLAN          # Redis plan tier
+CRON_SCHEDULE       # Cron job schedule (quoted string)
 ```
 
 **Application Variables:**
 ```bash
 NODE_ENVIRONMENT    # Node.js environment (production, development)
 APP_ENVIRONMENT     # Application environment identifier
-ALPACA_ENDPOINT     # Trading API endpoint
-CRON_SCHEDULE       # Market analysis frequency
+ALPACA_ENDPOINT     # Trading API endpoint (paper vs live)
 ```
+
+To add new environments, extend the script with additional cases.
 
 ### Frontend Deployment (Vercel)
 
@@ -680,60 +747,75 @@ ANTHROPIC_API_KEY=sk-ant-xxx
 
 ## 8. Platform Dashboard Environment Setup
 
-After setting up your services, you need to configure environment variables in each platform's dashboard. Here's a comprehensive guide for each platform:
+> **📢 IMPORTANT**: This section is for **VERIFICATION ONLY**. Do NOT manually configure secrets in service dashboards. All secrets are automatically synchronized from GitHub during deployment.
 
-### 8.1. Render Dashboard Setup
+After deployment, use these dashboards to verify that secrets were synced correctly:
+
+### 8.1. Render Dashboard - Verification Only
+
+> **⚠️ CRITICAL**: Do NOT manually set environment variables in Render dashboard. This section is for VERIFICATION ONLY.
 
 **Location**: [Render Dashboard](https://dashboard.render.com) → Your Service → Environment
 
-**For Each Service (Trade Server, Background Worker, Cron Job):**
+**Purpose**: View and verify that secrets were automatically synced from GitHub during deployment.
 
-1. **Database Variables (Atomic)**:
+**What You Should See (Automatically Synced from GitHub):**
+
+1. **Database Variables (from GitHub secrets)**:
    ```bash
-   DATABASE_HOST=aws-us-east-1-portal.23.psdb.cloud
-   DATABASE_PORT=5432
-   DATABASE_NAME=snoball-prod
-   DATABASE_USERNAME=your_planetscale_username
-   DATABASE_PASSWORD=your_planetscale_password
-   DATABASE_SSL=require
-   DATABASE_POOLING_PORT=6432
+   DATABASE_HOST              # ✅ Synced from GitHub environment secrets
+   DATABASE_PORT              # ✅ Synced from GitHub repository secrets
+   DATABASE_NAME              # ✅ Synced from GitHub repository secrets
+   DATABASE_USERNAME          # ✅ Synced from GitHub environment secrets
+   DATABASE_PASSWORD          # ✅ Synced from GitHub environment secrets (hidden)
+   DATABASE_SSL               # ✅ Synced from GitHub repository secrets
+   DATABASE_POOLING_PORT      # ✅ Synced from GitHub repository secrets
    ```
 
-2. **Trading API**:
+2. **Trading API (from GitHub secrets)**:
    ```bash
-   ALPACA_API_KEY=your_alpaca_api_key
-   ALPACA_SECRET_KEY=your_alpaca_secret_key
-   ALPACA_ENDPOINT=https://paper-api.alpaca.markets
+   ALPACA_API_KEY            # ✅ Synced from GitHub repository secrets
+   ALPACA_SECRET_KEY         # ✅ Synced from GitHub repository secrets (hidden)
+   ALPACA_ENDPOINT           # ✅ Set by render.yaml template
    ```
 
-3. **Authentication**:
+3. **Authentication (from GitHub secrets)**:
    ```bash
-   WORKOS_API_KEY=your_workos_api_key
-   WORKOS_CLIENT_ID=your_workos_client_id
-   WORKOS_WEBHOOK_SECRET=your_workos_webhook_secret
+   WORKOS_API_KEY            # ✅ Synced from GitHub repository secrets (hidden)
+   WORKOS_CLIENT_ID          # ✅ Synced from GitHub repository secrets
+   WORKOS_WEBHOOK_SECRET     # ✅ Synced from GitHub repository secrets (hidden)
    ```
 
-4. **Security**:
+4. **Security (from GitHub secrets)**:
    ```bash
-   ENCRYPTION_KEY=87a7bd3a8720709e5d018924dfc8060bb42340e96d8deafec75f25f9c046e992
-   NEXTAUTH_SECRET=6e9053e70e8021aa8508907f31fb16e14cb4b5b66ed76bcda58f339d2ab9b264
-   ```
-   *Generate with: `openssl rand -hex 32`*
-
-5. **Application**:
-   ```bash
-   NODE_ENV=production
-   ENVIRONMENT=production
-   PORT=9090
+   ENCRYPTION_KEY            # ✅ Synced from GitHub repository secrets (hidden)
+   NEXTAUTH_SECRET           # ✅ Synced from GitHub repository secrets (hidden)
    ```
 
-6. **AI APIs (Optional)**:
+5. **Application (from render.yaml template)**:
    ```bash
-   OPENAI_API_KEY=sk-proj-xxx
-   ANTHROPIC_API_KEY=sk-ant-xxx
+   NODE_ENV=production       # ✅ Set by template during deployment
+   ENVIRONMENT=production    # ✅ Set by template during deployment
+   PORT=9090                 # ✅ Set by template during deployment
    ```
 
-**Redis URL**: Render automatically provides `REDIS_URL` when you add a Redis service.
+6. **Platform-Provided Variables**:
+   ```bash
+   REDIS_URL                 # ✅ Automatically provided by Render Redis service
+   ```
+
+**If Variables Are Missing:**
+1. Check GitHub Actions deployment logs for sync failures
+2. Verify secrets exist in GitHub repository/environment settings
+3. Manually trigger secret sync: `gh workflow run sync-secrets.yml -f environment="production"`
+4. See Section 8.8 for detailed troubleshooting
+
+**Red Flags (Never Do This)**:
+- ❌ Manually adding environment variables in Render dashboard
+- ❌ Editing existing environment variables in Render dashboard
+- ❌ Using Render dashboard as configuration source
+- ❌ Bypassing GitHub secret synchronization
+
 
 ### 7.2. Vercel Dashboard Setup
 
@@ -1135,7 +1217,17 @@ jobs:
 
 ### 8.8. Secret Synchronization Strategy
 
-The project uses GitHub as the single source of truth for shared secrets, automatically syncing them to deployment services during CI/CD.
+> **🔑 CORE PRINCIPLE**: GitHub is the **ONLY** source of truth for all application secrets. Manual configuration in service dashboards is strictly prohibited and will cause configuration drift.
+
+**Why GitHub-Only Approach:**
+- **Version Control**: All secret changes are tracked and auditable
+- **Consistency**: Identical configurations across all environments and deployments  
+- **Automation**: Zero manual configuration reduces human error
+- **Disaster Recovery**: Complete configuration backup in version control
+- **Team Collaboration**: Centralized secret management with proper access controls
+- **CI/CD Integration**: Automatic synchronization ensures deployments never fail due to missing secrets
+
+**The project uses GitHub as the single source of truth for ALL application secrets, automatically syncing them to deployment services during CI/CD.**
 
 #### **Synchronization Workflow**
 
@@ -1256,7 +1348,163 @@ vercel env ls --token="$VERCEL_TOKEN"
 gh secret list
 ```
 
-### 8.9. Security Best Practices
+### 8.9. Secret Management Best Practices
+
+> **🎯 GOAL**: Maintain GitHub as the single source of truth for all application secrets while ensuring security and consistency.
+
+#### **Core Principles**
+
+**✅ DO: GitHub-First Approach**
+- Store ALL secrets in GitHub repository or environment settings
+- Use GitHub environments to separate dev/prod secrets
+- Always sync secrets via CI/CD, never manually
+- Use GitHub's secret scanning and security features
+- Document all secret changes in commit messages
+
+**❌ NEVER: Manual Dashboard Configuration**
+- Never add secrets directly to Render dashboard
+- Never edit environment variables in Vercel dashboard  
+- Never bypass GitHub secret synchronization
+- Never mix manual and automated configuration
+- Never store secrets in code or config files
+
+#### **Secret Organization Strategy**
+
+**Repository-Level Secrets** (shared across all environments):
+```bash
+# Core application secrets
+NEXTAUTH_SECRET                 # Authentication JWT secret
+ENCRYPTION_KEY                  # Application encryption key
+WORKOS_API_KEY                 # Authentication service API key
+WORKOS_CLIENT_ID               # Authentication service client ID
+
+# Trading API keys (if same for all envs)
+ALPACA_API_KEY                 # Trading platform API key
+ALPACA_SECRET_KEY              # Trading platform secret key
+
+# Deployment automation
+RENDER_API_KEY                 # For CI/CD deployment automation
+VERCEL_TOKEN                   # For CI/CD deployment automation
+```
+
+**Environment-Specific Secrets** (different per environment):
+```bash
+# Database credentials (different per PlanetScale branch)
+DATABASE_HOST                  # Environment-specific database host
+DATABASE_USERNAME              # Environment-specific username  
+DATABASE_PASSWORD              # Environment-specific password
+
+# Service identifiers
+RENDER_TRADE_SERVER_ID         # Environment-specific service ID
+RENDER_WORKER_ID               # Environment-specific worker ID
+RENDER_SERVICE_URL             # Environment-specific service URL
+VERCEL_APP_URL                 # Environment-specific app URL
+```
+
+#### **Secret Lifecycle Management**
+
+**Adding New Secrets:**
+1. Add secret to appropriate GitHub location (repo vs environment)
+2. Commit any code changes that reference the secret
+3. Deploy or manually trigger secret sync
+4. Verify secret appears in service dashboards
+5. Test application functionality with new secret
+
+**Updating Existing Secrets:**
+1. Update secret value in GitHub settings
+2. Trigger secret sync: `gh workflow run sync-secrets.yml`
+3. Verify secret updated in service dashboards
+4. Monitor application for any issues
+
+**Rotating Secrets:**
+1. Generate new secret value
+2. Update in GitHub settings
+3. Trigger immediate sync to all environments
+4. Test critical functionality
+5. Deactivate old secret in source service
+6. Document rotation in security log
+
+**Removing Secrets:**
+1. Remove secret from GitHub settings
+2. Update code to remove references
+3. Deploy changes
+4. Verify secret removed from service dashboards
+5. Clean up any dependent configurations
+
+#### **Secret Security Guidelines**
+
+**Secret Format Standards:**
+```bash
+# Use consistent naming conventions
+DATABASE_PASSWORD              # Clear, descriptive names
+NEXTAUTH_SECRET                # Follow service naming patterns
+WORKOS_API_KEY                 # Include service prefix
+
+# Generate secure values
+openssl rand -hex 32           # For encryption keys
+openssl rand -base64 32        # For JWT secrets
+# Service-provided values for API keys
+```
+
+**Access Control:**
+- Limit GitHub repository secret access to essential team members
+- Use GitHub environment protection rules for production
+- Require reviews for production environment changes
+- Enable GitHub secret scanning alerts
+- Use least-privilege principle for all service accounts
+
+**Monitoring and Auditing:**
+- Monitor GitHub Actions logs for sync failures
+- Set up alerts for secret synchronization issues
+- Regularly audit service dashboards for configuration drift
+- Review GitHub security alerts for exposed secrets
+- Document all secret changes in team communication
+
+#### **Troubleshooting Secret Issues**
+
+**Secret Not Syncing:**
+1. Check GitHub Actions deployment logs
+2. Verify secret exists with correct name (case-sensitive)
+3. Ensure GitHub workflow has access to secret
+4. Manually trigger sync workflow
+5. Check service dashboard for sync confirmation
+
+**Configuration Drift Detected:**
+1. **NEVER** fix by manual dashboard configuration
+2. Identify source of manual changes
+3. Update GitHub secrets to match intended state
+4. Trigger complete re-sync of all secrets
+5. Implement additional access controls to prevent future drift
+
+**Secret Exposed or Compromised:**
+1. Immediately rotate secret in source service
+2. Update GitHub secret with new value
+3. Trigger emergency sync to all environments
+4. Monitor for unauthorized access
+5. Review access logs and audit trails
+6. Document incident and improve security measures
+
+#### **Development Workflow**
+
+**Local Development:**
+- Use `.env.local` for local secrets (never commit)
+- Copy values from GitHub secrets when needed
+- Use paper trading and test API keys only
+- Never use production secrets locally
+
+**Code Changes:**
+- Reference secrets by exact GitHub secret name
+- Add new secrets to GitHub before deploying code
+- Test secret sync in development environment first
+- Document secret requirements in pull requests
+
+**Deployment Process:**
+- Secrets sync automatically during deployment
+- Monitor deployment logs for sync confirmation
+- Verify critical secrets are available post-deployment
+- Test application functionality with synced secrets
+
+### 8.10. Security Best Practices
 
 **Secret Management:**
 - ✅ Never commit secrets to code

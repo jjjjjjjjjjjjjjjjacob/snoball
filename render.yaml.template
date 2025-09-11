@@ -5,12 +5,12 @@
 services:
   # Main Trade Server - WebSocket connections to Alpaca
   - type: web
-    name: snoball-prod-trade-server
+    name: {{SERVICE_PREFIX}}-trade-server
     runtime: docker
     dockerfilePath: ./apps/trade-server/Dockerfile.render
-    plan: starter
+    plan: {{PLAN_TIER}}
     region: ohio # Central US for optimal trading latency
-    branch: main
+    branch: {{DEPLOY_BRANCH}}
 
     # Auto-deploy on git push
     autoDeploy: true
@@ -21,65 +21,65 @@ services:
     # Environment variables (Dockerfile handles service type detection)
     envVars:
       - key: NODE_ENV
-        value: production
+        value: {{NODE_ENVIRONMENT}}
       - key: PORT
         value: 9090
       - key: ENVIRONMENT
-        value: production
+        value: {{APP_ENVIRONMENT}}
       - key: ALPACA_ENDPOINT
-        value: https://api.alpaca.markets
+        value: {{ALPACA_ENDPOINT}}
 
     # Scaling configuration
     numInstances: 1
 
   # Background Worker for Order Processing
   - type: worker
-    name: snoball-prod-worker
+    name: {{SERVICE_PREFIX}}-worker
     runtime: docker
     dockerfilePath: ./apps/trade-server/Dockerfile.render
-    plan: starter
+    plan: {{PLAN_TIER}}
     region: ohio
-    branch: main
+    branch: {{DEPLOY_BRANCH}}
 
     autoDeploy: true
 
     envVars:
       - key: NODE_ENV
-        value: production
+        value: {{NODE_ENVIRONMENT}}
       - key: ENVIRONMENT
-        value: production
+        value: {{APP_ENVIRONMENT}}
       - key: WORKER_TYPE
         value: order_processor
       - key: ALPACA_ENDPOINT
-        value: https://api.alpaca.markets
+        value: {{ALPACA_ENDPOINT}}
 
     numInstances: 1
 
   # Cron Job for Market Analysis
   - type: cron
-    name: snoball-prod-analysis
+    name: {{SERVICE_PREFIX}}-analysis
     runtime: docker
     dockerfilePath: ./apps/trade-server/Dockerfile.render
-    plan: starter
+    plan: {{PLAN_TIER}}
     region: ohio
-    branch: main
+    branch: {{DEPLOY_BRANCH}}
 
-    schedule: "*/30 * * * *"
+    schedule: {{CRON_SCHEDULE}}
 
     envVars:
       - key: NODE_ENV
-        value: production
+        value: {{NODE_ENVIRONMENT}}
       - key: ENVIRONMENT
-        value: production
+        value: {{APP_ENVIRONMENT}}
       - key: JOB_TYPE
         value: market_analysis
       - key: ALPACA_ENDPOINT
-        value: https://api.alpaca.markets
+        value: {{ALPACA_ENDPOINT}}
 
   # Redis Cache (using Render's native Redis)
   - type: redis
-    name: snoball-prod-redis
-    plan: starter
+    name: {{SERVICE_PREFIX}}-redis
+    plan: {{REDIS_PLAN}}
     region: ohio
 
     # Redis configuration
